@@ -16,7 +16,7 @@
 <section class="card"><h2>Daftar Informasi</h2><div id="tableWrap">Memuat...</div></section>
 </main></div>
 <script>
-const API_URL='PASTE_WEB_APP_URL_DI_SINI';
+const API_URL='https://script.google.com/macros/s/AKfycbwx38PwBI22s-zRmqxiWKI10DEUEelF8px3MGYOBBtXcBuwQAzsAbVq86CfhmheZsdn/exec';
 let KEY=sessionStorage.getItem('TV_ADMIN_KEY')||'';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function msg(t,ok=true){const e=document.getElementById('msg');e.textContent=t;e.className='msg '+(ok?'ok':'err');e.style.display='block';setTimeout(()=>e.style.display='none',3500);}
