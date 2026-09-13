@@ -389,6 +389,9 @@
       class="login-logo"
       src="https://drive.google.com/thumbnail?id=1lBhSt2Dgq9VqI1AFuLcjB2ElnmvwGu-m&sz=w400"
       alt="Logo SMK Widya Dirgantara"
+      loading="eager"
+      decoding="async"
+      referrerpolicy="no-referrer"
     >
 
     <!-- Nama sekolah -->
@@ -604,7 +607,7 @@
   </section>
 
 <script>
-let T='', M=null, D={};
+let T='', M=null, D={guru:[],jadwal:[],kehadiran:[],kejadian:[],tugas:[],users:[]}, CURRENT_PAGE='dashboard', NAV_SEQ=0;
 const $=id=>document.getElementById(id);
 function toggleLoginPassword(){
 
@@ -668,18 +671,23 @@ async function restoreSession(){
   try{
     const initialData=await call('initial',T);
     $('loginPage').classList.add('hidden');$('appPage').classList.remove('hidden');
-    $('who').textContent=(M.Nama||'')+' ('+(M.Role||'')+')';
+    $('who').textContent=(M.NamaPetugas||'')+' ('+(M.Role||'')+')';
     $('usersMenu').classList.toggle('hidden',M.Role!=='Admin');
-    if($('apNama'))$('apNama').value=M.Nama||'';
+    if($('apNama'))$('apNama').value=M.NamaPetugas||'';
     setDateDefaults();
-    await refreshAll(initialData);
-    show(getLastPage(),false);
+    D=initialData||D;
+    await refreshDashboard();
+    await show(getLastPage(),false);
   }catch(e){
-    T='';M=null;D={};clearSession();
+    T='';M=null;D={guru:[],jadwal:[],kehadiran:[],kejadian:[],tugas:[],users:[]};clearSession();
     $('loginPage').classList.remove('hidden');$('appPage').classList.add('hidden');
   }
 }
-function setDateDefaults(){const d=new Date().toISOString().slice(0,10);['jt','kt','tt','rs','re','ast','agt'].forEach(id=>{if($(id))$(id).value=d;});}
+function todayClient(){
+  try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());}
+  catch(e){return new Date().toISOString().slice(0,10);}
+}
+function setDateDefaults(){const d=todayClient();['jt','kt','tt','rs','re','ast','agt'].forEach(id=>{if($(id))$(id).value=d;});}
 async function login(){
   const u=$('username').value.trim(), p=$('password').value;
   $('loginMsg').textContent='';
@@ -688,31 +696,61 @@ async function login(){
   try{
     const r=await call('login',u,p);
     if(!r||!r.ok){$('loginMsg').textContent=r&&r.message?r.message:'Login gagal.';return;}
-    T=r.token;M=r.user;saveSession();$('loginPage').classList.add('hidden');$('appPage').classList.remove('hidden');$('who').textContent=M.Nama+' ('+M.Role+')';
+    T=r.token;M=r.user;saveSession();$('loginPage').classList.add('hidden');$('appPage').classList.remove('hidden');$('who').textContent=M.NamaPetugas+' ('+M.Role+')';
     $('usersMenu').classList.toggle('hidden',M.Role!=='Admin');
-    if($('apNama')) $('apNama').value=M.Nama||'';
+    if($('apNama')) $('apNama').value=M.NamaPetugas||'';
     setDateDefaults();await refreshAll();
   }catch(e){$('loginMsg').textContent=e.message||String(e);}finally{$('loginBtn').disabled=false;}
 }
-async function logout(){try{if(T)await call('logout',T);}finally{T='';M=null;D={};clearSession();location.reload();}}
-async function refreshAll(initialData){
-  D=initialData||await call('initial',T);const d=await call('dash',T);
-  $('dGuru').textContent=d.guru;$('dJadwal').textContent=d.jadwal;$('dHadir').textContent=d.hadir;$('dKejadian').textContent=d.kejadian;$('dTugas').textContent=d.tugas;
-  try{const sr=await call('rekapAbsensiSiswa',T,new Date().toISOString().slice(0,10));$('dSiswa').textContent=sr.total;}catch(e){$('dSiswa').textContent='-';}
+async function logout(){try{if(T)await call('logout',T);}finally{T='';M=null;D={guru:[],jadwal:[],kehadiran:[],kejadian:[],tugas:[],users:[]};clearSession();location.reload();}}
+function applyDashboard(d){
+  $('dGuru').textContent=d.guru;$('dJadwal').textContent=d.jadwal;$('dHadir').textContent=d.hadir;$('dKejadian').textContent=d.kejadian;$('dTugas').textContent=d.tugas;$('dSiswa').textContent=d.siswa==null?'-':d.siswa;
   const gs=(D.guru||[]).filter(x=>x.Aktif==='Ya');
   const us=(D.users||[]).filter(x=>x.Aktif==='Ya');
-  ['hg','tg'].forEach(id=>{const s=$(id);s.innerHTML='';gs.forEach(g=>{const o=document.createElement('option');o.value=g.GuruID;o.textContent=g.NamaGuru;s.appendChild(o);});});
+  ['hg','tg'].forEach(id=>{const s=$(id);if(!s)return;s.innerHTML='';gs.forEach(g=>{const o=document.createElement('option');o.value=g.GuruID;o.textContent=g.NamaGuru;s.appendChild(o);});});
   const jsUser=$('jg');
-  if(jsUser){jsUser.innerHTML='';us.forEach(x=>{const o=document.createElement('option');o.value=x.UserID;o.textContent=x.Nama+' ('+x.UserID+')';jsUser.appendChild(o);});}
-  render();
-  if($('absensiSiswa')) loadAbsensiKelas();
+  if(jsUser){jsUser.innerHTML='';us.forEach(x=>{const o=document.createElement('option');o.value=x.UserID;o.textContent=x.NamaPetugas+' ('+x.UserID+')';jsUser.appendChild(o);});}
 }
-function show(id,remember=true){
+async function refreshDashboard(initialData){
+  if(initialData) D=initialData;
+  const d=await call('dash',T);
+  applyDashboard(d);
+}
+async function refreshAll(initialData){
+  if(initialData) D=initialData;
+  else D=await call('initial',T);
+  await refreshDashboard();
+  render();
+}
+async function refreshCurrentPage(){
+  const pagePromise=(CURRENT_PAGE!=='dashboard' && CURRENT_PAGE!=='absensiSiswa')
+    ? call('pageData',T,CURRENT_PAGE)
+    : Promise.resolve(null);
+  const dashPromise=call('dash',T);
+  const [pageData,d]=await Promise.all([pagePromise,dashPromise]);
+  if(pageData) Object.assign(D,pageData);
+  applyDashboard(d);
+  render();
+  if(CURRENT_PAGE==='absensiSiswa') await loadAbsensiKelas();
+}
+async function loadPageData(page){
+  const data=await call('pageData',T,page);
+  Object.assign(D,data||{});
+  return data;
+}
+async function show(id,remember=true){
   const target=$(id)?id:'dashboard';
+  const nav=++NAV_SEQ;
   document.querySelectorAll('main section').forEach(s=>s.classList.add('hidden'));
   $(target).classList.remove('hidden');
+  CURRENT_PAGE=target;
   if(remember)saveLastPage(target);
+  if(target!=='dashboard' && target!=='absensiSiswa'){
+    try{await loadPageData(target);}catch(e){if(nav===NAV_SEQ)alert(e.message);return;}
+  }
+  if(nav!==NAV_SEQ)return;
   render();
+  if(target==='absensiSiswa') await loadAbsensiKelas();
 }
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function table(target,headers,rows){
@@ -722,16 +760,20 @@ function table(target,headers,rows){
 }
 function render(){
   if(!D||!M)return;
-  table('gtable',['NIP','Nama','Mapel','HP','Aktif'],(D.guru||[]).map(x=>[x.NIP,x.NamaGuru,x.Mapel,x.NoHP,x.Aktif]));
-  table('jtable',['Tanggal','Hari','Shift','Guru','Jam','Ruang'],(D.jadwal||[]).map(x=>[x.Tanggal,x.Hari,x.Shift,x.NamaGuru,(x.JamMulai||'')+'-'+(x.JamSelesai||''),x.RuangPiket]));
-  const today=new Date().toISOString().slice(0,10);
-  table('ht',['Tanggal','Guru','Shift','Datang','Pulang','Status'],(D.kehadiran||[]).filter(x=>x.Tanggal===today).map(x=>[x.Tanggal,x.NamaGuru,x.Shift,x.JamDatang,x.JamPulang,x.Status]));
-  table('ktable',['Tanggal','Jenis','Lokasi','Uraian','Status'],(D.kejadian||[]).map(x=>[x.Tanggal,x.Jenis,x.Lokasi,x.Uraian,x.Status]));
-  table('ttable',['Tanggal','Guru','Tugas','Status'],(D.tugas||[]).map(x=>[x.Tanggal,x.NamaGuru,x.Tugas,x.Status]));
-  table('utable',['Username','Nama','Role','Aktif'],(D.users||[]).map(x=>[x.Username,x.Nama,x.Role,x.Aktif]));
+  if(CURRENT_PAGE==='guru') table('gtable',['NIP','Nama','Mapel','HP','Aktif'],(D.guru||[]).map(x=>[x.NIP,x.NamaGuru,x.Mapel,x.NoHP,x.Aktif]));
+  else if(CURRENT_PAGE==='jadwal') table('jtable',['Tanggal','Hari','Shift','Guru','Jam','Ruang'],(D.jadwal||[]).map(x=>[x.Tanggal,x.Hari,x.Shift,x.NamaPetugas,(x.JamMulai||'')+'-'+(x.JamSelesai||''),x.RuangPiket]));
+  else if(CURRENT_PAGE==='hadir') renderHadir();
+  else if(CURRENT_PAGE==='kejadian') table('ktable',['Tanggal','Jenis','Lokasi','Uraian','Status'],(D.kejadian||[]).map(x=>[x.Tanggal,x.Jenis,x.Lokasi,x.Uraian,x.Status]));
+  else if(CURRENT_PAGE==='tugas') table('ttable',['Tanggal','Guru','Tugas','Status'],(D.tugas||[]).map(x=>[x.Tanggal,x.NamaGuru,x.Tugas,x.Status]));
+  else if(CURRENT_PAGE==='users') table('utable',['Username','Nama','Role','Aktif'],(D.users||[]).map(x=>[x.Username,x.NamaPetugas,x.Role,x.Aktif]));
 }
-async function cin(){try{await call('hadir',T,$('hg').value,$('hs').value,$('hk').value,false);await refreshAll();alert('Absen datang berhasil');}catch(e){alert(e.message);}}
-async function cout(){try{await call('hadir',T,$('hg').value,$('hs').value,$('hk').value,true);await refreshAll();alert('Absen pulang berhasil');}catch(e){alert(e.message);}}
+function renderHadir(){
+  const today=todayClient();
+  table('ht',['Tanggal','Guru','Shift','Datang','Pulang','Status'],(D.kehadiran||[]).filter(x=>x.Tanggal===today).map(x=>[x.Tanggal,x.NamaGuru,x.Shift,x.JamDatang,x.JamPulang,x.Status]));
+}
+
+async function cin(){try{await call('hadir',T,$('hg').value,$('hs').value,$('hk').value,false);await refreshCurrentPage();alert('Absen datang berhasil');}catch(e){alert(e.message);}}
+async function cout(){try{await call('hadir',T,$('hg').value,$('hs').value,$('hk').value,true);await refreshCurrentPage();alert('Absen pulang berhasil');}catch(e){alert(e.message);}}
 
 async function absenPetugas(pulang){
   const ket=$('apKet') ? $('apKet').value.trim() : '';
@@ -739,14 +781,14 @@ async function absenPetugas(pulang){
     const r=await call('absensiPetugas',T,pulang,ket);
     alert(r.message||'Absensi petugas berhasil.');
     if($('apKet')) $('apKet').value='';
-    await refreshAll();
+    await refreshCurrentPage();
   }catch(e){alert(e.message||String(e));}
 }
-async function sg(){try{await call('guru',T,{NIP:$('gn').value,NamaGuru:$('gm').value,Mapel:$('gp').value,NoHP:$('gh').value,Email:$('ge').value,Aktif:$('ga').value});await refreshAll();alert('Data guru tersimpan');}catch(e){alert(e.message);}}
-async function sj(){try{await call('jadwal',T,{Tanggal:$('jt').value,UserID:$('jg').value,Shift:$('js').value,JamMulai:$('jm').value,JamSelesai:$('jx').value,RuangPiket:$('jr').value,Catatan:$('jc').value});await refreshAll();alert('Jadwal tersimpan');}catch(e){alert(e.message);}}
-async function sk(){try{await call('kejadian',T,{Tanggal:$('kt').value,Waktu:$('kw').value,Jenis:$('kjenis').value,Lokasi:$('kl').value,Pelapor:$('kp').value,Uraian:$('ku').value,TindakLanjut:$('ktl').value});await refreshAll();alert('Kejadian tersimpan');}catch(e){alert(e.message);}}
-async function st(){try{await call('tugas',T,{Tanggal:$('tt').value,GuruID:$('tg').value,Tugas:$('tx').value,Keterangan:$('tk').value});await refreshAll();alert('Tugas tersimpan');}catch(e){alert(e.message);}}
-async function su(){try{await call('user',T,{Username:$('un').value,Password:$('up').value,Nama:$('unm').value,Role:$('ur').value});await refreshAll();alert('Pengguna tersimpan');}catch(e){alert(e.message);}}
+async function sg(){try{await call('guru',T,{NIP:$('gn').value,NamaGuru:$('gm').value,Mapel:$('gp').value,NoHP:$('gh').value,Email:$('ge').value,Aktif:$('ga').value});await refreshCurrentPage();alert('Data guru tersimpan');}catch(e){alert(e.message);}}
+async function sj(){try{await call('jadwal',T,{Tanggal:$('jt').value,UserID:$('jg').value,Shift:$('js').value,JamMulai:$('jm').value,JamSelesai:$('jx').value,RuangPiket:$('jr').value,Catatan:$('jc').value});await refreshCurrentPage();alert('Jadwal tersimpan');}catch(e){alert(e.message);}}
+async function sk(){try{await call('kejadian',T,{Tanggal:$('kt').value,Waktu:$('kw').value,Jenis:$('kjenis').value,Lokasi:$('kl').value,Pelapor:$('kp').value,Uraian:$('ku').value,TindakLanjut:$('ktl').value});await refreshCurrentPage();alert('Kejadian tersimpan');}catch(e){alert(e.message);}}
+async function st(){try{await call('tugas',T,{Tanggal:$('tt').value,GuruID:$('tg').value,Tugas:$('tx').value,Keterangan:$('tk').value});await refreshCurrentPage();alert('Tugas tersimpan');}catch(e){alert(e.message);}}
+async function su(){try{await call('user',T,{Username:$('un').value,Password:$('up').value,NamaPetugas:$('unm').value,Role:$('ur').value});await refreshCurrentPage();alert('Pengguna tersimpan');}catch(e){alert(e.message);}}
 
 async function loadAbsensiSiswa(){
   try{
@@ -769,6 +811,7 @@ async function saveAbsensiSiswa(btn){
     if(btn){btn.disabled=true;btn.textContent='⏳ Menyimpan...';}
     const r=await call('simpanAbsensiSiswa',T,$('ast').value,$('ask').value,$('ass').value,$('asq').value);
     alert(r.message||'Data absensi siswa berhasil disimpan.');
+    await loadAbsensiSiswa();
   }catch(e){
     alert(e.message||String(e));
   }finally{
@@ -778,12 +821,11 @@ async function saveAbsensiSiswa(btn){
 
 async function loadAbsensiKelas(){
   try{
-    const data=await call('absensiSiswa',T,$('ast').value,'','','');
-    const classes=[...new Set(data.map(x=>x.Kelas).filter(Boolean))].sort();
+    const classes=await call('kelasAbsensiSiswa',T,$('ast').value);
     const s=$('ask'), old=s.value;
     s.innerHTML='<option value="">Semua Kelas</option>';
-    classes.forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;s.appendChild(o);});
-    if(classes.includes(old))s.value=old;
+    (classes||[]).forEach(k=>{const o=document.createElement('option');o.value=k;o.textContent=k;s.appendChild(o);});
+    if((classes||[]).includes(old))s.value=old;
   }catch(e){console.log(e);}
 }
 
@@ -801,7 +843,7 @@ async function saveAbsensiGuru(btn){
     if(btn){btn.disabled=true;btn.textContent='⏳ Menyimpan...';}
     const r=await call('simpanAbsensiGuru',T,$('agt').value);
     alert(r.message||'Data absensi guru berhasil disimpan.');
-    await refreshAll();
+    await refreshCurrentPage();
   }catch(e){
     alert(e.message||String(e));
   }finally{
