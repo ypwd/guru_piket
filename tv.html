@@ -146,7 +146,7 @@ async function load(){
     js.forEach(x=>{
       const nama=String(x.NamaPetugas||'').trim();
       if(nama && !guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))){
-        guruPiket.push({nama,ruang:String(x.RuangPiket||'').trim()});
+        guruPiket.push({nama});
       }
     });
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
@@ -161,7 +161,7 @@ function render(){
   $('pct').textContent=(data.siswa.persentase||0).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
   $('donut').style.setProperty('--pct',(data.siswa.persentase||0)+'%');
   $('date').textContent=data.tanggalDisplay;$('date2').textContent=data.tanggalDisplay;
-  const duty=(data.guruPiket||[]).map((x,i)=>'<div><span style="display:inline-block;min-width:1.3em;color:#d34b16">'+(i+1)+'.</span>'+esc(x.nama)+(x.ruang?'<span class="duty-room"> — '+esc(x.ruang)+'</span>':'')+'</div>').join('')||'<div>Tidak ada jadwal piket</div>';$('duty').innerHTML=duty;
+  const duty=(data.guruPiket||[]).map((x,i)=>'<div><span style="display:inline-block;min-width:1.3em;color:#d34b16">'+(i+1)+'.</span>'+esc(x.nama)+'</div>').join('')||'<div>Tidak ada jadwal piket</div>';$('duty').innerHTML=duty;
   $('updated').textContent=new Date(data.generatedAt).toLocaleTimeString('id-ID');$('updated2').textContent=new Date(data.generatedAt).toLocaleTimeString('id-ID');
   renderInfo();renderClasses();
 }
