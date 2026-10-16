@@ -86,30 +86,42 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&l
 function fmt(n){return new Intl.NumberFormat('id-ID').format(n||0);}
 function dateJakarta(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta'}).format(new Date());}
 function dayJakarta(){return new Intl.DateTimeFormat('id-ID',{timeZone:'Asia/Jakarta',weekday:'long'}).format(new Date()).toLocaleLowerCase('id-ID');}
-function normalizeDay(v){return String(v||'').trim().toLocaleLowerCase('id-ID').replace(/\./g,'').normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+function normalizeDay(v){
+  return String(v||'').trim().toLocaleLowerCase('id-ID').replace(/[’']/g,'').replace(/\./g,'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,'');
+}
 function dateOnly(v){return String(v||'').slice(0,10);}
 function asArray(v){if(!v)return[];return Array.isArray(v)?v.filter(Boolean):Object.entries(v).map(([k,x])=>Object.assign({_key:k},x&&typeof x==='object'?x:{value:x}));}
 function dutyRowsForDay(raw, day){
-  const found=[];
-  const dayKeys=['hari','haripiket','hari_piket','day','namahari','namaharipiket'];
-  const statusOff=['nonaktif','non aktif','tidak aktif'];
-  const hasDutyFields=o=>Object.keys(o||{}).some(k=>{const n=k.toLowerCase().replace(/[^a-z0-9]/g,'');return n.includes('nama')||n.includes('guru')||n.includes('petugas');});
+  const found=[], seen=new Set();
+  const wanted=normalizeDay(day);
+  const weekdays=['senin','selasa','rabu','kamis','jumat','sabtu','minggu'];
+  const off=['nonaktif','nonaktifkan','tidakaktif'];
+  const hasNameField=o=>Object.keys(o||{}).some(k=>{
+    const n=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+    return (n.includes('nama')&&(n.includes('guru')||n.includes('petugas')||n==='nama')) || n.includes('gurupiket') || n.includes('petugaspiket');
+  });
   function walk(node,keyHint=''){
     if(!node||typeof node!=='object')return;
     if(Array.isArray(node)){node.forEach(v=>walk(v,keyHint));return;}
     const pairs=Object.entries(node);
-    const dayPair=pairs.find(([k])=>dayKeys.includes(k.toLowerCase().replace(/[^a-z0-9_]/g,'')) || dayKeys.includes(k.toLowerCase().replace(/[^a-z0-9]/g,'')));
-    const ownDay=dayPair?normalizeDay(dayPair[1]):'';
-    const keyDay=normalizeDay(keyHint);
-    const status=String(node.Status||node.status||'Aktif').trim().toLocaleLowerCase('id-ID');
-    if((ownDay===day || (!ownDay && keyDay===day && hasDutyFields(node))) && !statusOff.includes(status)){
-      found.push(node);
-      return;
+    let ownDay='';
+    for(const [k,v] of pairs){
+      const nk=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+      if((nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('namahari')) && typeof v==='string'){
+        const candidate=normalizeDay(v);
+        if(weekdays.includes(candidate)){ownDay=candidate;break;}
+      }
     }
-    pairs.forEach(([k,v])=>{if(v&&typeof v==='object'){const nk=normalizeDay(k);const weekdays=['senin','selasa','rabu','kamis','jumat','sabtu','minggu'];walk(v,weekdays.includes(nk)?k:keyHint);}});
+    const hinted=normalizeDay(keyHint);
+    const rowDay=ownDay || (weekdays.includes(hinted)?hinted:'');
+    const status=normalizeDay(node.Status||node.status||'Aktif');
+    if(rowDay===wanted && hasNameField(node) && !off.includes(status) && !seen.has(node)){
+      seen.add(node);found.push(node);
+    }
+    // Traverse all nested objects so all 9 jadwal records are checked.
+    pairs.forEach(([k,v])=>{if(v&&typeof v==='object')walk(v,weekdays.includes(normalizeDay(k))?k:keyHint);});
   }
   walk(raw);
-  // Hilangkan referensi record duplikat tanpa membuang dua petugas berbeda.
   return found;
 }
 async function get(path){return (await FB_DB.ref(FB_ROOT+'/'+path).once('value')).val();}
@@ -124,7 +136,7 @@ async function load(){
     await verifyTV();
     const today=dateJakarta();
     const [teachers,studentAtt,jadwal,info]=await Promise.all([
-      get('shared/teachers'),get('apps/absensi_siswa/attendance'),get('apps/piket/jadwal'),get('apps/piket/tv_display/informasi')
+      get('shared/teachers'),get('apps/absensi_siswa/attendance'),FB_DB.ref('schools/smkwd/apps/piket/jadwal').once('value').then(s=>s.val()),get('apps/piket/tv_display/informasi')
     ]);
     const [teacherAtt]=await Promise.all([get('apps/absensi_guru/attendance')]);
     const ta=asArray(teacherAtt).filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
@@ -169,7 +181,7 @@ async function load(){
         return;
       }
       // Jika dua nama disimpan dalam satu kolom, pisahkan berdasarkan baris/koma/semicolon.
-      String(value??'').split(/[\n,;]+/).map(n=>n.trim()).filter(Boolean).forEach(nama=>{
+      String(value??'').split(/[\n;]+/).map(n=>n.trim()).filter(Boolean).forEach(nama=>{
         if(!guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID')))
           guruPiket.push({nama});
       });
