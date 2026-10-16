@@ -123,7 +123,7 @@ async function load(){
     const alpa=sa.filter(x=>String(x.status||x.Status||'').toLowerCase()==='alpa').length;
     const persentase=sa.length?Number((hadir/sa.length*100).toFixed(2)):0;
     const guruHadir=ta.filter(x=>String(x.status||x.Status||'Hadir').toLowerCase()==='hadir').length;
-    const guruPiket=js.map(x=>({nama:x.NamaGuru||x.NamaPetugas||x.namaPetugas||x.nama||'',ruang:x.RuangPiket||x.ruangPiket||''})).filter(x=>x.nama);
+    const guruPiket=js.map(x=>({nama:x.NamaGuru||x.NamaPetugas||x.namaPetugas||x.nama||'',ruang:x.RuangPiket||x.ruangPiket||''})).filter(x=>x.namaPetugas);
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
     render();
   }catch(e){console.warn('TV Firebase:',e);}
