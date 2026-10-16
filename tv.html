@@ -84,6 +84,8 @@ $('logo').src='Logowd.png';$('logo2').src='Logowd.png';
 function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));}
 function fmt(n){return new Intl.NumberFormat('id-ID').format(n||0);}
 function dateJakarta(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta'}).format(new Date());}
+function dayJakarta(){return new Intl.DateTimeFormat('id-ID',{timeZone:'Asia/Jakarta',weekday:'long'}).format(new Date()).toLocaleLowerCase('id-ID');}
+function normalizeDay(v){return String(v||'').trim().toLocaleLowerCase('id-ID').replace(/\./g,'');}
 function dateOnly(v){return String(v||'').slice(0,10);}
 function asArray(v){if(!v)return[];return Array.isArray(v)?v.filter(Boolean):Object.entries(v).map(([k,x])=>Object.assign({_key:k},x||{}));}
 async function get(path){return (await FB_DB.ref(FB_ROOT+'/'+path).once('value')).val();}
@@ -103,7 +105,13 @@ async function load(){
     const [teacherAtt]=await Promise.all([get('apps/absensi_guru/attendance')]);
     const ta=asArray(teacherAtt).filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
     const sa=asArray(studentAtt).filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
-    const js=asArray(jadwal).filter(x=>dateOnly(x.Tanggal||x.tanggal)===today && String(x.Status||x.status||'Aktif').toLowerCase()!=='nonaktif');
+    // Jadwal guru piket dipilih berdasarkan HARI, bukan tanggal kalender.
+    const hariIni=dayJakarta();
+    const js=asArray(jadwal).filter(x=>{
+      const hari=normalizeDay(x.Hari||x.hari||x.HariPiket||x.hariPiket||x.hari_piket||x.Day||x.day||x.NamaHari||x.namaHari);
+      const status=String(x.Status||x.status||'Aktif').trim().toLocaleLowerCase('id-ID');
+      return hari===hariIni && !['nonaktif','non aktif','tidak aktif'].includes(status);
+    });
     const inf=asArray(info).filter(x=>String(x.status||'')==='Aktif').sort((a,b)=>(Number(a.order)||9999)-(Number(b.order)||9999));
     const per={};
     sa.forEach(x=>{
@@ -123,7 +131,38 @@ async function load(){
     const alpa=sa.filter(x=>String(x.status||x.Status||'').toLowerCase()==='alpa').length;
     const persentase=sa.length?Number((hadir/sa.length*100).toFixed(2)):0;
     const guruHadir=ta.filter(x=>String(x.status||x.Status||'Hadir').toLowerCase()==='hadir').length;
-    const guruPiket=js.map(x=>({nama:x.NamaGuru||x.NamaPetugas||x.namaPetugas||x.nama||'',ruang:x.RuangPiket||x.ruangPiket||''})).filter(x=>x.nama);
+    // Ambil SEMUA petugas yang terjadwal pada hari ini, termasuk dua nama
+    // dalam satu record (mis. NamaGuru1/NamaGuru2) maupun dua record terpisah.
+    const guruPiket=[];
+    const tambahNama=(value,ruang)=>{
+      if(Array.isArray(value)){
+        value.forEach(v=>tambahNama(v,ruang));
+        return;
+      }
+      if(value&&typeof value==='object'){
+        const namaObj=value.nama||value.Nama||value.namaGuru||value.NamaGuru||value.namaPetugas||value.NamaPetugas;
+        if(namaObj)tambahNama(namaObj,ruang);
+        return;
+      }
+      const nama=String(value??'').trim();
+      if(nama && !guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))){
+        guruPiket.push({nama,ruang:ruang||''});
+      }
+    };
+    js.forEach(x=>{
+      const ruang=x.RuangPiket||x.ruangPiket||x.ruang_piket||'';
+      [
+        x.NamaGuru,x.namaGuru,x.nama_guru,x.nama_guru_piket,
+        x.NamaPetugas,x.namaPetugas,x.nama_petugas,
+        x.Nama,x.nama,x.Guru,x.guru,x.Petugas,x.petugas,
+        x.NamaGuruPiket,x.namaGuruPiket,
+        x.NamaGuru1,x.namaGuru1,x.NamaGuru2,x.namaGuru2,
+        x.NamaPetugas1,x.namaPetugas1,x.NamaPetugas2,x.namaPetugas2,
+        x.Guru1,x.guru1,x.Guru2,x.guru2,
+        x.Petugas1,x.petugas1,x.Petugas2,x.petugas2,
+        x.PetugasPiket,x.petugasPiket,x.DaftarPetugas,x.daftarPetugas
+      ].forEach(v=>tambahNama(v,ruang));
+    });
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
     render();
   }catch(e){console.warn('TV Firebase:',e);}
