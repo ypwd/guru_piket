@@ -73,7 +73,7 @@ const FIREBASE_CONFIG={
   messagingSenderId:"420017732791",
   appId:"1:420017732791:web:b841fa4e5c91251e786132"
 };
-const SCHOOL='smkwd', FB_ROOT='schools/'+SCHOOL;
+const SCHOOL='SMKWD', FB_ROOT='schools/'+SCHOOL;
 const INFO_PATH=FB_ROOT+'/apps/piket/tv_display/informasi';
 const TV_EMAIL='tv@tv.smkwd.local';
 const REFRESH_MS=30000, SLIDE_MS=12000;
@@ -86,58 +86,9 @@ function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&l
 function fmt(n){return new Intl.NumberFormat('id-ID').format(n||0);}
 function dateJakarta(){return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Jakarta'}).format(new Date());}
 function dayJakarta(){return new Intl.DateTimeFormat('id-ID',{timeZone:'Asia/Jakarta',weekday:'long'}).format(new Date()).toLocaleLowerCase('id-ID');}
-function normalizeDay(v){
-  return String(v||'').trim().toLocaleLowerCase('id-ID').replace(/[’']/g,'').replace(/\./g,'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,'');
-}
+function normalizeDay(v){return String(v||'').trim().toLocaleLowerCase('id-ID').replace(/\./g,'');}
 function dateOnly(v){return String(v||'').slice(0,10);}
-function asArray(v){if(!v)return[];return Array.isArray(v)?v.filter(Boolean):Object.entries(v).map(([k,x])=>Object.assign({_key:k},x&&typeof x==='object'?x:{value:x}));}
-function dutyRowsForDay(raw, day){
-  // Firebase jadwal dapat berbentuk array, object ber-key hari, atau object bertingkat.
-  // Kumpulkan semua record yang cocok dengan hari ini tanpa bergantung pada tanggal.
-  const found=[], seen=new Set();
-  const wanted=normalizeDay(day);
-  const weekdays=['senin','selasa','rabu','kamis','jumat','sabtu','minggu'];
-  const isObject=v=>v!==null && typeof v==='object';
-  const normKey=k=>String(k||'').toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-  function getOwnDay(obj){
-    for(const [k,v] of Object.entries(obj||{})){
-      const nk=normKey(k);
-      if((nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('namahari'))){
-        const vals=Array.isArray(v)?v:[v];
-        for(const val of vals){
-          const d=normalizeDay(val);
-          if(weekdays.includes(d)) return d;
-        }
-      }
-    }
-    return '';
-  }
-  function walk(node,keyHint='',inheritedDay=''){
-    if(!isObject(node)) return;
-    if(Array.isArray(node)){
-      node.forEach(v=>walk(v,keyHint,inheritedDay));
-      return;
-    }
-    const ownDay=getOwnDay(node);
-    const hinted=normalizeDay(keyHint);
-    const rowDay=ownDay || (weekdays.includes(hinted)?hinted:'') || inheritedDay;
-    // Treat this object as a schedule record if it explicitly has a matching day.
-    // Avoid requiring a specific name-field spelling; Firebase schemas can vary.
-    if(rowDay===wanted && Object.keys(node).length && !seen.has(node)){
-      seen.add(node); found.push(node);
-    }
-    for(const [k,v] of Object.entries(node)){
-      if(!isObject(v)) continue;
-      const kh=weekdays.includes(normalizeDay(k))?k:keyHint;
-      // Do not let a parent record's day incorrectly override an explicit different day.
-      walk(v,kh,ownDay || inheritedDay);
-    }
-  }
-  walk(raw);
-  // Keep parent and nested records: either level may contain a petugas name.
-  // Duplicate names are removed later when rendering the final list.
-  return found;
-}
+function asArray(v){if(!v)return[];return Array.isArray(v)?v.filter(Boolean):Object.entries(v).map(([k,x])=>Object.assign({_key:k},x||{}));}
 async function get(path){return (await FB_DB.ref(FB_ROOT+'/'+path).once('value')).val();}
 async function verifyTV(){
   const u=FB_AUTH.currentUser;if(!u)throw Error('TV belum login Firebase.');
@@ -158,7 +109,11 @@ async function load(){
     const sa=allStudentAtt.filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
     // Jadwal guru piket dipilih berdasarkan HARI, bukan tanggal kalender.
     const hariIni=dayJakarta();
-    const js=dutyRowsForDay(jadwal,hariIni);
+    const js=asArray(jadwal).filter(x=>{
+      const hari=normalizeDay(x.Hari||x.hari||x.HariPiket||x.hariPiket||x.hari_piket||x.Day||x.day||x.NamaHari||x.namaHari);
+      const status=String(x.Status||x.status||'Aktif').trim().toLocaleLowerCase('id-ID');
+      return hari===hariIni && !['nonaktif','non aktif','tidak aktif'].includes(status);
+    });
     const inf=asArray(info).filter(x=>String(x.status||'')==='Aktif').sort((a,b)=>(Number(a.order)||9999)-(Number(b.order)||9999));
     const per={};
     // Daftarkan semua kelas yang pernah muncul di data absensi, termasuk kelas
@@ -184,52 +139,49 @@ async function load(){
     const alpa=sa.filter(x=>String(x.status||x.Status||'').toLowerCase()==='alpa').length;
     const persentase=sa.length?Number((hadir/sa.length*100).toFixed(2)):0;
     const guruHadir=ta.filter(x=>String(x.status||x.Status||'Hadir').toLowerCase()==='hadir').length;
-    // Ambil nama dari seluruh record hari ini. Nama lengkap/gelar dipertahankan;
-    // kolom ruang piket tidak pernah ditampilkan.
+    // Ambil SEMUA petugas yang terjadwal pada hari ini, termasuk dua nama
+    // dalam satu record (mis. NamaGuru1/NamaGuru2) maupun dua record terpisah.
     const guruPiket=[];
-    const tambahNama=(value)=>{
-      if(value===undefined||value===null) return;
-      if(Array.isArray(value)){value.forEach(tambahNama);return;}
-      if(typeof value==='object'){
-        // Data petugas kadang disimpan sebagai object berisi nama.
-        for(const [k,v] of Object.entries(value)){
-          const nk=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-          if(nk.includes('ruang')||nk.includes('status')||nk==='hari'||nk.includes('tanggal')) continue;
-          if(nk==='nama'||nk.includes('namaguru')||nk.includes('namapetugas')||nk.includes('gurupiket')||nk.includes('petugaspiket')||/^guru\d+$/.test(nk)||/^petugas\d+$/.test(nk)) tambahNama(v);
-        }
+    const tambahNama=(value,ruang)=>{
+      if(Array.isArray(value)){
+        value.forEach(v=>tambahNama(v,ruang));
         return;
       }
-      const nama=String(value).trim();
-      if(!nama || /^(aktif|nonaktif|senin|selasa|rabu|kamis|jumat|sabtu|minggu)$/i.test(nama)) return;
-      if(!guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))) guruPiket.push({nama});
+      if(value&&typeof value==='object'){
+        const namaObj=value.nama||value.Nama||value.namaGuru||value.NamaGuru||value.namaPetugas||value.NamaPetugas;
+        if(namaObj)tambahNama(namaObj,ruang);
+        return;
+      }
+      const nama=String(value??'').trim();
+      if(nama && !guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))){
+        guruPiket.push({nama,ruang:ruang||''});
+      }
     };
-    const namaFields=new Set([
-      'nama','namaguru','namagurupiket','namapetugas','namapetugaspiket','nama_guru','nama_guru_piket','nama_petugas',
-      'gurupiket','petugaspiket','guru','petugas','namaguru1','namaguru2','namapetugas1','namapetugas2',
-      'gurupiket1','gurupiket2','petugaspiket1','petugaspiket2','guru1','guru2','petugas1','petugas2',
-      'daftarpetugas','daftarguru','namapiket','petugasjadwal'
-    ]);
-    js.forEach(row=>{
-      // Support the common explicit fields plus any numbered/name variant.
-      Object.entries(row||{}).forEach(([key,value])=>{
-        const nk=key.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-        if(nk.includes('ruang')||nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('tanggal')||nk==='status') return;
-        const looksLikeName = namaFields.has(key.toLocaleLowerCase('id-ID')) ||
-          nk==='nama' || nk.includes('namaguru') || nk.includes('namapetugas') || nk.includes('gurupiket') || nk.includes('petugaspiket') ||
-          /^guru\d+$/.test(nk) || /^petugas\d+$/.test(nk) || /^nama\d+$/.test(nk) || nk==='guru' || nk==='petugas';
-        if(looksLikeName) tambahNama(value);
+    js.forEach(x=>{
+      const ruang=x.RuangPiket||x.ruangPiket||x.ruang_piket||'';
+      const kandidatNama=[
+        x.NamaGuru,x.namaGuru,x.nama_guru,x.nama_guru_piket,
+        x.NamaPetugas,x.namaPetugas,x.nama_petugas,
+        x.Nama,x.nama,x.Guru,x.guru,x.Petugas,x.petugas,
+        x.NamaGuruPiket,x.namaGuruPiket,
+        x.NamaGuru1,x.namaGuru1,x.NamaGuru2,x.namaGuru2,
+        x.NamaPetugas1,x.namaPetugas1,x.NamaPetugas2,x.namaPetugas2,
+        x.Guru1,x.guru1,x.Guru2,x.guru2,
+        x.Petugas1,x.petugas1,x.Petugas2,x.petugas2,
+        x.PetugasPiket,x.petugasPiket,x.DaftarPetugas,x.daftarPetugas
+      ];
+      // Sertakan juga kolom nama tambahan yang mungkin berbeda penamaannya,
+      // misalnya NamaGuruPiket2 atau NamaPetugasPiket.
+      Object.entries(x).forEach(([k,v])=>{
+        const key=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+        if((key.includes('nama')&&(key.includes('guru')||key.includes('petugas'))) ||
+           ((key.includes('guru')||key.includes('petugas')) && /\d+$/.test(key))) kandidatNama.push(v);
       });
-      // If the schedule record itself contains nested petugas collections, inspect them too.
-      Object.entries(row||{}).forEach(([key,value])=>{
-        const nk=key.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-        if(!nk.includes('ruang') && (nk.includes('daftar')||nk.includes('petugas')||nk.includes('guru'))) {
-          if(value && typeof value==='object') tambahNama(value);
-        }
-      });
+      kandidatNama.forEach(v=>tambahNama(v,ruang));
     });
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
     render();
-  }catch(e){console.error('TV Firebase gagal memuat data:',e);}
+  }catch(e){console.warn('TV Firebase:',e);}
 }
 function render(){
   if(!data)return;
@@ -239,7 +191,7 @@ function render(){
   $('pct').textContent=(data.siswa.persentase||0).toLocaleString('id-ID',{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
   $('donut').style.setProperty('--pct',(data.siswa.persentase||0)+'%');
   $('date').textContent=data.tanggalDisplay;$('date2').textContent=data.tanggalDisplay;
-  const duty=(data.guruPiket||[]).map((x,i)=>'<div><span style="display:inline-block;min-width:1.3em;color:#d34b16">'+(i+1)+'.</span>'+esc(x.nama)+'</div>').join('')||'<div>Tidak ada jadwal piket</div>';$('duty').innerHTML=duty;
+  const duty=(data.guruPiket||[]).map((x,i)=>'<div><span style="display:inline-block;min-width:1.3em;color:#d34b16">'+(i+1)+'.</span>'+esc(x.nama)+(x.ruang?'<span class="duty-room"> — '+esc(x.ruang)+'</span>':'')+'</div>').join('')||'<div>Tidak ada jadwal piket</div>';$('duty').innerHTML=duty;
   $('updated').textContent=new Date(data.generatedAt).toLocaleTimeString('id-ID');$('updated2').textContent=new Date(data.generatedAt).toLocaleTimeString('id-ID');
   renderInfo();renderClasses();
 }
@@ -250,29 +202,37 @@ function renderInfo(){
   infoPageIndex=Math.min(infoPageIndex,Math.max(0,infoPages.length-1));showInfoPage();
 }
 function infoImageValue(x){
-  // Informasi sekolah harus memakai URL gambar langsung, bukan path Firebase Storage.
-  const keys=['imageUrl','imageURL','image_url','url','URL','fotoUrl','FotoUrl','fotoURL','FotoURL','foto_url','gambarUrl','gambarURL','urlGambar','URLGambar','url_gambar','photoUrl','PhotoUrl','photoURL','urlFoto','url_foto','linkGambar','link_gambar','image','Image','foto','Foto','gambar','Gambar'];
+  const keys=['imageUrl','imageURL','image_url','image','Image','fotoUrl','FotoUrl','fotoURL','FotoURL','foto_url','foto','Foto','gambar','Gambar','photoUrl','PhotoUrl','photoURL','urlGambar','URLGambar','url_gambar','imagePath','image_path','fotoPath','foto_path','gambarUrl','gambarURL','fileUrl','fileURL','downloadURL','downloadUrl','urlFoto','url_foto'];
   for(const k of keys){
     const v=x?.[k];
-    if(typeof v==='string'&&/^https?:\/\//i.test(v.trim()))return v.trim();
+    if(typeof v==='string'&&v.trim())return v.trim();
     if(v&&typeof v==='object'){
-      const nested=v.url||v.URL||v.imageUrl||v.downloadURL||v.downloadUrl;
-      if(typeof nested==='string'&&/^https?:\/\//i.test(nested.trim()))return nested.trim();
+      const nested=v.url||v.downloadURL||v.downloadUrl||v.fullPath||v.path;
+      if(typeof nested==='string'&&nested.trim())return nested.trim();
     }
   }
   return '';
 }
-function resolveInfoImage(value){
-  const raw=String(value||'').trim();
-  return /^https?:\/\//i.test(raw)?raw:'';
+async function resolveInfoImage(value){
+  if(!value)return '';
+  let raw=String(value).trim();
+  if(/^https?:\/\//i.test(raw)||/^data:image\//i.test(raw))return raw;
+  try{
+    if(raw.startsWith('gs://'))return await firebase.storage().refFromURL(raw).getDownloadURL();
+  }catch(e){console.warn('URL foto Storage tidak valid:',e);}
+  // Firebase Storage path atau nama file relatif.
+  raw=raw.replace(/^\/+/, '');
+  try{return await firebase.storage().ref(raw).getDownloadURL();}catch(e){
+    try{return await firebase.storage().ref().child(raw).getDownloadURL();}catch(err){console.warn('Foto informasi tidak dapat dimuat:',raw,err);return '';}
+  }
 }
 function showInfoPage(){
   const page=infoPages[infoPageIndex]||[];if(!page.length)return;
   const box=$('infoList');
   box.innerHTML=page.map((x,i)=>'<div class="info-item" data-info-index="'+i+'">'+(infoImageValue(x)?'<img class="info-photo" alt="Foto informasi sekolah">':'')+'<b>'+esc(x.title||x.judul||x.nama||'Informasi sekolah')+'</b><p>'+esc(x.content||x.isi||x.keterangan||x.deskripsi||'').replace(/\n/g,'<br>')+'</p></div>').join('');
-  page.forEach((x,i)=>{
+  page.forEach(async (x,i)=>{
     const value=infoImageValue(x);if(!value)return;
-    const url=resolveInfoImage(value);
+    const url=await resolveInfoImage(value);
     const item=box.querySelector('[data-info-index="'+i+'"] img');
     if(item&&url){item.src=url;item.onload=()=>{item.classList.remove('hidden');};item.onerror=()=>{console.warn('Gagal menampilkan foto informasi:',url);item.classList.add('hidden');};}
     else if(item)item.classList.add('hidden');
