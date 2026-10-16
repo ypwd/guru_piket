@@ -92,36 +92,50 @@ function normalizeDay(v){
 function dateOnly(v){return String(v||'').slice(0,10);}
 function asArray(v){if(!v)return[];return Array.isArray(v)?v.filter(Boolean):Object.entries(v).map(([k,x])=>Object.assign({_key:k},x&&typeof x==='object'?x:{value:x}));}
 function dutyRowsForDay(raw, day){
+  // Firebase jadwal dapat berbentuk array, object ber-key hari, atau object bertingkat.
+  // Kumpulkan semua record yang cocok dengan hari ini tanpa bergantung pada tanggal.
   const found=[], seen=new Set();
   const wanted=normalizeDay(day);
   const weekdays=['senin','selasa','rabu','kamis','jumat','sabtu','minggu'];
-  const off=['nonaktif','nonaktifkan','tidakaktif'];
-  const hasNameField=o=>Object.keys(o||{}).some(k=>{
-    const n=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-    return (n.includes('nama')&&(n.includes('guru')||n.includes('petugas')||n==='nama')) || n.includes('gurupiket') || n.includes('petugaspiket');
-  });
-  function walk(node,keyHint=''){
-    if(!node||typeof node!=='object')return;
-    if(Array.isArray(node)){node.forEach(v=>walk(v,keyHint));return;}
-    const pairs=Object.entries(node);
-    let ownDay='';
-    for(const [k,v] of pairs){
-      const nk=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-      if((nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('namahari')) && typeof v==='string'){
-        const candidate=normalizeDay(v);
-        if(weekdays.includes(candidate)){ownDay=candidate;break;}
+  const isObject=v=>v!==null && typeof v==='object';
+  const normKey=k=>String(k||'').toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+  function getOwnDay(obj){
+    for(const [k,v] of Object.entries(obj||{})){
+      const nk=normKey(k);
+      if((nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('namahari'))){
+        const vals=Array.isArray(v)?v:[v];
+        for(const val of vals){
+          const d=normalizeDay(val);
+          if(weekdays.includes(d)) return d;
+        }
       }
     }
-    const hinted=normalizeDay(keyHint);
-    const rowDay=ownDay || (weekdays.includes(hinted)?hinted:'');
-    const status=normalizeDay(node.Status||node.status||'Aktif');
-    if(rowDay===wanted && hasNameField(node) && !off.includes(status) && !seen.has(node)){
-      seen.add(node);found.push(node);
+    return '';
+  }
+  function walk(node,keyHint='',inheritedDay=''){
+    if(!isObject(node)) return;
+    if(Array.isArray(node)){
+      node.forEach(v=>walk(v,keyHint,inheritedDay));
+      return;
     }
-    // Traverse all nested objects so all 9 jadwal records are checked.
-    pairs.forEach(([k,v])=>{if(v&&typeof v==='object')walk(v,weekdays.includes(normalizeDay(k))?k:keyHint);});
+    const ownDay=getOwnDay(node);
+    const hinted=normalizeDay(keyHint);
+    const rowDay=ownDay || (weekdays.includes(hinted)?hinted:'') || inheritedDay;
+    // Treat this object as a schedule record if it explicitly has a matching day.
+    // Avoid requiring a specific name-field spelling; Firebase schemas can vary.
+    if(rowDay===wanted && Object.keys(node).length && !seen.has(node)){
+      seen.add(node); found.push(node);
+    }
+    for(const [k,v] of Object.entries(node)){
+      if(!isObject(v)) continue;
+      const kh=weekdays.includes(normalizeDay(k))?k:keyHint;
+      // Do not let a parent record's day incorrectly override an explicit different day.
+      walk(v,kh,ownDay || inheritedDay);
+    }
   }
   walk(raw);
+  // Keep parent and nested records: either level may contain a petugas name.
+  // Duplicate names are removed later when rendering the final list.
   return found;
 }
 async function get(path){return (await FB_DB.ref(FB_ROOT+'/'+path).once('value')).val();}
@@ -170,40 +184,48 @@ async function load(){
     const alpa=sa.filter(x=>String(x.status||x.Status||'').toLowerCase()==='alpa').length;
     const persentase=sa.length?Number((hadir/sa.length*100).toFixed(2)):0;
     const guruHadir=ta.filter(x=>String(x.status||x.Status||'Hadir').toLowerCase()==='hadir').length;
-    // Ambil SEMUA petugas yang terjadwal pada hari ini, termasuk dua nama
-    // dalam satu record (mis. NamaGuru1/NamaGuru2) maupun dua record terpisah.
+    // Ambil nama dari seluruh record hari ini. Nama lengkap/gelar dipertahankan;
+    // kolom ruang piket tidak pernah ditampilkan.
     const guruPiket=[];
     const tambahNama=(value)=>{
+      if(value===undefined||value===null) return;
       if(Array.isArray(value)){value.forEach(tambahNama);return;}
-      if(value&&typeof value==='object'){
-        const namaObj=value.nama||value.Nama||value.namaGuru||value.NamaGuru||value.namaPetugas||value.NamaPetugas||value.value;
-        if(namaObj)tambahNama(namaObj);
+      if(typeof value==='object'){
+        // Data petugas kadang disimpan sebagai object berisi nama.
+        for(const [k,v] of Object.entries(value)){
+          const nk=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+          if(nk.includes('ruang')||nk.includes('status')||nk==='hari'||nk.includes('tanggal')) continue;
+          if(nk==='nama'||nk.includes('namaguru')||nk.includes('namapetugas')||nk.includes('gurupiket')||nk.includes('petugaspiket')||/^guru\d+$/.test(nk)||/^petugas\d+$/.test(nk)) tambahNama(v);
+        }
         return;
       }
-      // Jika dua nama disimpan dalam satu kolom, pisahkan berdasarkan baris/koma/semicolon.
-      String(value??'').split(/[\n;]+/).map(n=>n.trim()).filter(Boolean).forEach(nama=>{
-        if(!guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID')))
-          guruPiket.push({nama});
-      });
+      const nama=String(value).trim();
+      if(!nama || /^(aktif|nonaktif|senin|selasa|rabu|kamis|jumat|sabtu|minggu)$/i.test(nama)) return;
+      if(!guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))) guruPiket.push({nama});
     };
-    js.forEach(x=>{
-      const kandidatNama=[];
-      const namaFields=[
-        'NamaGuru','namaGuru','nama_guru','nama_guru_piket','NamaPetugas','namaPetugas','nama_petugas',
-        'Nama','nama','NamaGuruPiket','namaGuruPiket','GuruPiket','guruPiket','guru_piket','PetugasPiket','petugasPiket','petugas_piket',
-        'NamaGuru1','namaGuru1','NamaGuru2','namaGuru2','NamaPetugas1','namaPetugas1','NamaPetugas2','namaPetugas2',
-        'GuruPiket1','guruPiket1','GuruPiket2','guruPiket2','Guru1','guru1','Guru2','guru2',
-        'Petugas1','petugas1','Petugas2','petugas2','DaftarPetugas','daftarPetugas','DaftarGuru','daftarGuru'
-      ];
-      namaFields.forEach(k=>{if(x[k]!==undefined&&x[k]!==null)kandidatNama.push(x[k]);});
-      // Tangkap kolom tambahan seperti "Nama Guru Piket 2", tetapi jangan pernah mengambil kolom ruang.
-      Object.entries(x).forEach(([k,v])=>{
-        const key=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
-        if(key.includes('ruang'))return;
-        if((key.includes('nama')&&(key.includes('guru')||key.includes('petugas'))) ||
-           ((key.includes('guru')||key.includes('petugas')) && (key.includes('piket')||/\d+$/.test(key)))) kandidatNama.push(v);
+    const namaFields=new Set([
+      'nama','namaguru','namagurupiket','namapetugas','namapetugaspiket','nama_guru','nama_guru_piket','nama_petugas',
+      'gurupiket','petugaspiket','guru','petugas','namaguru1','namaguru2','namapetugas1','namapetugas2',
+      'gurupiket1','gurupiket2','petugaspiket1','petugaspiket2','guru1','guru2','petugas1','petugas2',
+      'daftarpetugas','daftarguru','namapiket','petugasjadwal'
+    ]);
+    js.forEach(row=>{
+      // Support the common explicit fields plus any numbered/name variant.
+      Object.entries(row||{}).forEach(([key,value])=>{
+        const nk=key.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+        if(nk.includes('ruang')||nk==='hari'||nk.includes('haripiket')||nk==='day'||nk.includes('tanggal')||nk==='status') return;
+        const looksLikeName = namaFields.has(key.toLocaleLowerCase('id-ID')) ||
+          nk==='nama' || nk.includes('namaguru') || nk.includes('namapetugas') || nk.includes('gurupiket') || nk.includes('petugaspiket') ||
+          /^guru\d+$/.test(nk) || /^petugas\d+$/.test(nk) || /^nama\d+$/.test(nk) || nk==='guru' || nk==='petugas';
+        if(looksLikeName) tambahNama(value);
       });
-      kandidatNama.forEach(tambahNama);
+      // If the schedule record itself contains nested petugas collections, inspect them too.
+      Object.entries(row||{}).forEach(([key,value])=>{
+        const nk=key.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+        if(!nk.includes('ruang') && (nk.includes('daftar')||nk.includes('petugas')||nk.includes('guru'))) {
+          if(value && typeof value==='object') tambahNama(value);
+        }
+      });
     });
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
     render();
