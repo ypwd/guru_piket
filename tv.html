@@ -73,7 +73,7 @@ const FIREBASE_CONFIG={
   messagingSenderId:"420017732791",
   appId:"1:420017732791:web:b841fa4e5c91251e786132"
 };
-const SCHOOL='SMKWD', FB_ROOT='schools/'+SCHOOL;
+const SCHOOL='smkwd', FB_ROOT='schools/'+SCHOOL;
 const INFO_PATH=FB_ROOT+'/apps/piket/tv_display/informasi';
 const TV_EMAIL='tv@tv.smkwd.local';
 const REFRESH_MS=30000, SLIDE_MS=12000;
@@ -150,7 +150,7 @@ async function load(){
     await verifyTV();
     const today=dateJakarta();
     const [teachers,studentAtt,jadwal,info]=await Promise.all([
-      get('shared/teachers'),get('apps/absensi_siswa/attendance'),FB_DB.ref('schools/smkwd/apps/piket/jadwal').once('value').then(s=>s.val()),get('apps/piket/tv_display/informasi')
+      get('shared/teachers'),get('apps/absensi_siswa/attendance'),get('apps/piket/jadwal'),get('apps/piket/tv_display/informasi')
     ]);
     const [teacherAtt]=await Promise.all([get('apps/absensi_guru/attendance')]);
     const ta=asArray(teacherAtt).filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
@@ -229,7 +229,7 @@ async function load(){
     });
     data={sekolah:'SMKS WIDYA DIRGANTARA BANDUNG',guru:{hadir:guruHadir},siswa:{hadir,sakit,izin,alpa,persentase},tanggalDisplay:new Date().toLocaleDateString('id-ID',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}),generatedAt:new Date().toISOString(),guruPiket,informasi:inf,kelas:rows};
     render();
-  }catch(e){console.warn('TV Firebase:',e);}
+  }catch(e){console.error('TV Firebase gagal memuat data:',e);}
 }
 function render(){
   if(!data)return;
