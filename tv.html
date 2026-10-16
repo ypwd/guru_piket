@@ -109,8 +109,15 @@ async function load(){
     const sa=allStudentAtt.filter(x=>dateOnly(x.tanggal||x.Tanggal)===today);
     // Jadwal guru piket dipilih berdasarkan HARI, bukan tanggal kalender.
     const hariIni=dayJakarta();
+    // Cari semua baris jadwal untuk hari yang sama. Nama kolom hari dibuat
+    // fleksibel agar variasi penamaan pada data jadwal tetap terbaca.
     const js=asArray(jadwal).filter(x=>{
-      const hari=normalizeDay(x.Hari||x.hari||x.HariPiket||x.hariPiket||x.hari_piket||x.Day||x.day||x.NamaHari||x.namaHari);
+      const entri=Object.entries(x||{});
+      const nilaiHari=entri.find(([k])=>{
+        const key=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
+        return ['hari','haripiket','namahari','day'].includes(key);
+      })?.[1];
+      const hari=normalizeDay(nilaiHari);
       const status=String(x.Status||x.status||'Aktif').trim().toLocaleLowerCase('id-ID');
       return hari===hariIni && !['nonaktif','non aktif','tidak aktif'].includes(status);
     });
@@ -139,43 +146,32 @@ async function load(){
     const alpa=sa.filter(x=>String(x.status||x.Status||'').toLowerCase()==='alpa').length;
     const persentase=sa.length?Number((hadir/sa.length*100).toFixed(2)):0;
     const guruHadir=ta.filter(x=>String(x.status||x.Status||'Hadir').toLowerCase()==='hadir').length;
-    // Ambil SEMUA petugas yang terjadwal pada hari ini, termasuk dua nama
-    // dalam satu record (mis. NamaGuru1/NamaGuru2) maupun dua record terpisah.
+    // Ambil dua guru piket dari dua baris jadwal dengan hari yang sama.
+    // Jika satu baris berisi dua nama, keduanya juga bisa dibaca.
     const guruPiket=[];
     const tambahNama=(value,ruang)=>{
-      if(Array.isArray(value)){
-        value.forEach(v=>tambahNama(v,ruang));
-        return;
-      }
-      if(value&&typeof value==='object'){
+      if(Array.isArray(value)){ value.forEach(v=>tambahNama(v,ruang)); return; }
+      if(value && typeof value==='object'){
         const namaObj=value.nama||value.Nama||value.namaGuru||value.NamaGuru||value.namaPetugas||value.NamaPetugas;
         if(namaObj)tambahNama(namaObj,ruang);
         return;
       }
       const nama=String(value??'').trim();
-      if(nama && !guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID'))){
+      if(nama && !guruPiket.some(p=>p.nama.toLocaleLowerCase('id-ID')===nama.toLocaleLowerCase('id-ID')) && guruPiket.length<2){
         guruPiket.push({nama,ruang:ruang||''});
       }
     };
     js.forEach(x=>{
+      if(guruPiket.length>=2)return;
       const ruang=x.RuangPiket||x.ruangPiket||x.ruang_piket||'';
-      const kandidatNama=[
-        x.NamaGuru,x.namaGuru,x.nama_guru,x.nama_guru_piket,
-        x.NamaPetugas,x.namaPetugas,x.nama_petugas,
-        x.Nama,x.nama,x.Guru,x.guru,x.Petugas,x.petugas,
-        x.NamaGuruPiket,x.namaGuruPiket,
-        x.NamaGuru1,x.namaGuru1,x.NamaGuru2,x.namaGuru2,
-        x.NamaPetugas1,x.namaPetugas1,x.NamaPetugas2,x.namaPetugas2,
-        x.Guru1,x.guru1,x.Guru2,x.guru2,
-        x.Petugas1,x.petugas1,x.Petugas2,x.petugas2,
-        x.PetugasPiket,x.petugasPiket,x.DaftarPetugas,x.daftarPetugas
-      ];
-      // Sertakan juga kolom nama tambahan yang mungkin berbeda penamaannya,
-      // misalnya NamaGuruPiket2 atau NamaPetugasPiket.
-      Object.entries(x).forEach(([k,v])=>{
+      const kandidatNama=[];
+      Object.entries(x||{}).forEach(([k,v])=>{
         const key=k.toLocaleLowerCase('id-ID').replace(/[^a-z0-9]/g,'');
         if((key.includes('nama')&&(key.includes('guru')||key.includes('petugas'))) ||
-           ((key.includes('guru')||key.includes('petugas')) && /\d+$/.test(key))) kandidatNama.push(v);
+           ((key.includes('guru')||key.includes('petugas')) && /\\d+$/.test(key)) ||
+           ['nama','guru','petugas','namapetugas','petugaspiket','daftarpetugas'].includes(key)){
+          kandidatNama.push(v);
+        }
       });
       kandidatNama.forEach(v=>tambahNama(v,ruang));
     });
